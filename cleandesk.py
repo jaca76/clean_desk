@@ -7,7 +7,6 @@ from watchdog.events import FileSystemEventHandler
 import shutil
 from datetime import date
 from pathlib import Path
-#test2
 #test
 
 extension_paths = {
