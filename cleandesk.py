@@ -154,7 +154,7 @@ extension_paths = {
         '.lnk':    'system',
         '.msi':    'system',
         '.sys':    'system',
-        '.tmp':    'system'
+        '.tmp':    'system',
         # cad
         '.stl':     'stl'
         }
