@@ -165,7 +165,7 @@ def add_date_to_path(path: Path):
 
     :param Path path: destination root to append subdirectories based on date
     """
-    dated_path = path / f'{date.today().year}' / f'{date.today().month:02d}'
+    dated_path = path / f'{date.today().year}' 
     dated_path.mkdir(parents=True, exist_ok=True)
     return dated_path
 
