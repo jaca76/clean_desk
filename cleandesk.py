@@ -209,8 +209,8 @@ class EventHandler(FileSystemEventHandler):
                 shutil.move(src=child, dst=destination_path)
 
 if __name__ == '__main__':
-    watch_path = Path.home() / 'Desktop'
-    destination_root = Path.home() / 'Desktop/holder of things'
+    watch_path = Path.home() / 'Downloads'
+    destination_root = Path.home() / 'Downloads/holder of things'
     event_handler = EventHandler(watch_path=watch_path, destination_root=destination_root)
 
     observer = Observer()
