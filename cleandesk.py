@@ -161,6 +161,7 @@ extension_paths = {
 def analyze_folder_content(folder_path: Path):
     """
     Analyze the content of a folder and determine the most common file type category.
+    Handles permission errors gracefully.
     
     :param Path folder_path: path to the folder to analyze
     :return: category name based on most common file types in the folder
@@ -170,14 +171,23 @@ def analyze_folder_content(folder_path: Path):
     
     categories = []
     
-    # Recursively scan all files in the folder
-    for file_path in folder_path.rglob('*'):
-        if file_path.is_file():
-            file_extension = file_path.suffix.lower()
-            if file_extension in extension_paths:
-                categories.append(extension_paths[file_extension])
-            else:
-                categories.append('uncategorized')
+    try:
+        # Recursively scan all files in the folder
+        for file_path in folder_path.rglob('*'):
+            try:
+                if file_path.is_file():
+                    file_extension = file_path.suffix.lower()
+                    if file_extension in extension_paths:
+                        categories.append(extension_paths[file_extension])
+                    else:
+                        categories.append('uncategorized')
+            except (PermissionError, OSError):
+                # Skip files we can't access
+                continue
+                
+    except (PermissionError, OSError):
+        print(f"Warning: Cannot fully analyze folder {folder_path.name} - permission denied")
+        return 'uncategorized'
     
     if not categories:
         return 'empty_folders'
@@ -211,20 +221,58 @@ def rename_file(source: Path, destination_path: Path):
         return destination_path / source.name
 
 
+def is_write_protected(path: Path):
+    """
+    Check if a file or folder is write-protected.
+    
+    :param Path path: path to check
+    :return: True if write-protected, False otherwise
+    """
+    try:
+        # For files, check if we can write to the file
+        if path.is_file():
+            return not path.stat().st_mode & 0o200  # Check write permission for owner
+        # For directories, check if we can write to the directory
+        elif path.is_dir():
+            return not path.stat().st_mode & 0o200  # Check write permission for owner
+        return False
+    except (OSError, PermissionError):
+        return True
+
+
 def move_item(source: Path, destination_root: Path, category: str):
     """
     Move a file or folder to the appropriate category directory.
+    Skips write-protected items with a warning message.
     
     :param Path source: source file or folder to be moved
     :param Path destination_root: root destination directory
     :param str category: category subdirectory name
     """
-    destination_path = destination_root / category
-    destination_path.mkdir(parents=True, exist_ok=True)
-    
-    final_destination = rename_file(source=source, destination_path=destination_path)
-    shutil.move(src=source, dst=final_destination)
-    print(f"Moved {source.name} to {category}")
+    try:
+        # Check if source is write-protected
+        if is_write_protected(source):
+            print(f"Skipped {source.name} - write protected")
+            return
+        
+        # Check if parent directory allows file removal
+        if is_write_protected(source.parent):
+            print(f"Skipped {source.name} - parent directory is write protected")
+            return
+        
+        destination_path = destination_root / category
+        destination_path.mkdir(parents=True, exist_ok=True)
+        
+        final_destination = rename_file(source=source, destination_path=destination_path)
+        shutil.move(src=source, dst=final_destination)
+        print(f"Moved {source.name} to {category}")
+        
+    except PermissionError as e:
+        print(f"Skipped {source.name} - permission denied: {e}")
+    except OSError as e:
+        print(f"Skipped {source.name} - system error: {e}")
+    except Exception as e:
+        print(f"Skipped {source.name} - unexpected error: {e}")
 
 
 class EventHandler(FileSystemEventHandler):
@@ -233,26 +281,40 @@ class EventHandler(FileSystemEventHandler):
         self.destination_root = destination_root.resolve()
 
     def on_modified(self, event):
-        for child in self.watch_path.iterdir():
-            # Skip the destination folder to avoid moving it
-            if child.resolve() == self.destination_root:
-                continue
-                
-            if child.is_file():
-                # Handle files
-                file_extension = child.suffix.lower()
-                if file_extension in extension_paths:
-                    category = extension_paths[file_extension]
-                else:
-                    category = 'uncategorized'
-                
-                move_item(child, self.destination_root, category)
-                
-            elif child.is_dir():
-                # Handle folders based on their content
-                category = analyze_folder_content(child)
-                if category:
-                    move_item(child, self.destination_root, category)
+        try:
+            for child in self.watch_path.iterdir():
+                try:
+                    # Skip the destination folder to avoid moving it
+                    if child.resolve() == self.destination_root:
+                        continue
+                        
+                    if child.is_file():
+                        # Handle files
+                        file_extension = child.suffix.lower()
+                        if file_extension in extension_paths:
+                            category = extension_paths[file_extension]
+                        else:
+                            category = 'uncategorized'
+                        
+                        move_item(child, self.destination_root, category)
+                        
+                    elif child.is_dir():
+                        # Handle folders based on their content
+                        category = analyze_folder_content(child)
+                        if category:
+                            move_item(child, self.destination_root, category)
+                            
+                except (PermissionError, OSError) as e:
+                    print(f"Skipped {child.name if 'child' in locals() else 'unknown item'} - access denied: {e}")
+                    continue
+                except Exception as e:
+                    print(f"Skipped {child.name if 'child' in locals() else 'unknown item'} - error: {e}")
+                    continue
+                    
+        except (PermissionError, OSError) as e:
+            print(f"Cannot access watch directory - permission denied: {e}")
+        except Exception as e:
+            print(f"Unexpected error in file monitoring: {e}")
 
 
 def select_folder():
@@ -330,6 +392,7 @@ def select_folder():
 def organize_existing_files(watch_path: Path, destination_root: Path):
     """
     Organize files that already exist in the watch folder.
+    Handles permission errors gracefully.
     
     :param Path watch_path: folder to scan for existing files
     :param Path destination_root: destination for organized files
@@ -338,11 +401,19 @@ def organize_existing_files(watch_path: Path, destination_root: Path):
     
     items_to_organize = []
     
-    for child in watch_path.iterdir():
-        # Skip the destination folder to avoid moving it
-        if child.resolve() == destination_root.resolve():
-            continue
-        items_to_organize.append(child)
+    try:
+        for child in watch_path.iterdir():
+            try:
+                # Skip the destination folder to avoid moving it
+                if child.resolve() == destination_root.resolve():
+                    continue
+                items_to_organize.append(child)
+            except (PermissionError, OSError):
+                print(f"Skipped scanning {child.name} - permission denied")
+                continue
+    except (PermissionError, OSError) as e:
+        print(f"Cannot access watch directory: {e}")
+        return
     
     if not items_to_organize:
         print("No files or folders found to organize.")
@@ -356,21 +427,29 @@ def organize_existing_files(watch_path: Path, destination_root: Path):
         print("Organizing existing files...")
         
         for child in items_to_organize:
-            if child.is_file():
-                # Handle files
-                file_extension = child.suffix.lower()
-                if file_extension in extension_paths:
-                    category = extension_paths[file_extension]
-                else:
-                    category = 'uncategorized'
-                
-                move_item(child, destination_root, category)
-                
-            elif child.is_dir():
-                # Handle folders based on their content
-                category = analyze_folder_content(child)
-                if category:
+            try:
+                if child.is_file():
+                    # Handle files
+                    file_extension = child.suffix.lower()
+                    if file_extension in extension_paths:
+                        category = extension_paths[file_extension]
+                    else:
+                        category = 'uncategorized'
+                    
                     move_item(child, destination_root, category)
+                    
+                elif child.is_dir():
+                    # Handle folders based on their content
+                    category = analyze_folder_content(child)
+                    if category:
+                        move_item(child, destination_root, category)
+                        
+            except (PermissionError, OSError) as e:
+                print(f"Skipped {child.name} - permission denied: {e}")
+                continue
+            except Exception as e:
+                print(f"Skipped {child.name} - error: {e}")
+                continue
         
         print("Finished organizing existing files!")
     else:
